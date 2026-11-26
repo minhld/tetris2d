@@ -10,7 +10,9 @@ export const SHAPES = [
   [[0, 1, 0], [1, 1, 1]],
   [[1, 0, 0], [1, 1, 1]],
   [[1, 1, 1, 1]],
-  [[0, 1, 0], [1, 1, 1], [0, 1, 0]],
+  [[1, 0], [1, 1], [0, 1]],
+  [[0, 0, 1], [1, 1, 1]],
+  [[0, 1], [1, 1], [1, 0]],
 ];
 
 const emptyRow = () => Array(COLS).fill(null);
@@ -62,14 +64,19 @@ export function landing(game) {
 function lock(game, piece) {
   const board = game.board.map((row) => [...row]);
   for (const [x, y] of cells(piece)) board[y][x] = piece.kind;
-  const kept = board.filter((row) => row.includes(null));
-  const cleared = ROWS - kept.length;
+  const clearedRows = [];
+  const kept = board.filter((row, index) => {
+    if (row.includes(null)) return true;
+    clearedRows.push(index);
+    return false;
+  });
+  const cleared = clearedRows.length;
   const updated = [...Array.from({ length: cleared }, emptyRow), ...kept];
   const incoming = spawn(game.next);
   const [next, bag] = draw(game.bag);
   return {
     ...game, board: updated, piece: incoming, score: game.score + cleared, next, bag,
-    pieceNumber: game.pieceNumber + 1, gravity: 0,
+    pieceNumber: game.pieceNumber + 1, gravity: 0, clearedRows,
     end: blocked(updated, incoming) ? 'Game over' : null,
   };
 }
@@ -94,10 +101,11 @@ export function play(game, action) {
 
 export const level = (game) => game.mode === 'advanced' ? Math.floor(game.score / 100) + 1 : 1;
 
-export function tick(game, elapsed) {
+export function tick(game, elapsed, holdGravity = false) {
   if (game.end) return game;
   const remaining = game.mode === 'timed' ? Math.max(0, game.remaining - elapsed) : game.remaining;
   if (!remaining) return { ...game, remaining, end: 'Time is up' };
+  if (holdGravity) return remaining === game.remaining ? game : { ...game, remaining };
   const interval = Math.max(100, 650 * 0.84 ** (level(game) - 1));
   const gravity = game.gravity + elapsed;
   if (gravity < interval) return { ...game, remaining, gravity };

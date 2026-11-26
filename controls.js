@@ -1,19 +1,77 @@
 import React, { useEffect, useRef } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { PanResponder, Platform, Pressable, Text, View } from 'react-native';
+
+function repeatAction(timers, action, act) {
+  stopRepeat(timers);
+  if (!act(action)) return;
+  const fasterDrop = action === 'down' && Platform.OS !== 'web';
+  const interval = fasterDrop ? 36 : action === 'down' ? 48 : 60;
+  timers.delay = setTimeout(() => {
+    if (!act(action)) return;
+    timers.repeat = setInterval(() => {
+      if (!act(action)) stopRepeat(timers);
+    }, interval);
+  }, fasterDrop ? 130 : 200);
+}
+
+function stopRepeat(timers) {
+  clearTimeout(timers.delay);
+  clearInterval(timers.repeat);
+}
+
+export function useEdgeBack(close) {
+  const start = useRef(null);
+  const responder = useRef(null);
+  if (!responder.current) {
+    responder.current = PanResponder.create({
+      onStartShouldSetPanResponderCapture: ({ nativeEvent }) => {
+        start.current = { x: nativeEvent.pageX, y: nativeEvent.pageY };
+        return false;
+      },
+      onMoveShouldSetPanResponderCapture: (_, { dx, dy, numberActiveTouches }) =>
+        numberActiveTouches === 1 && start.current?.x <= 26 && dx > 12 && dx > Math.abs(dy) * 1.5,
+      onPanResponderRelease: ({ nativeEvent }) => {
+        if (!start.current) return;
+        const dx = nativeEvent.pageX - start.current.x;
+        const dy = nativeEvent.pageY - start.current.y;
+        if (dx >= 64 && dx > Math.abs(dy) * 1.5) close();
+      },
+    });
+  }
+  return responder.current.panHandlers;
+}
 
 export function useSwipe(enabled, cellSize, act) {
   const gesture = useRef(null);
+  const timers = useRef({});
+
+  function cancel() {
+    gesture.current = null;
+    stopRepeat(timers.current);
+  }
+
+  useEffect(() => {
+    if (!enabled) cancel();
+    return cancel;
+  }, [enabled]);
 
   function track(event, finish = false) {
     const touch = gesture.current;
     if (!enabled || !touch) return;
     const { pageX, pageY, touches } = event.nativeEvent;
-    if (touches?.length > 1) touch.axis = 'cancelled';
+    if (touches?.length > 1) {
+      cancel();
+      return;
+    }
     const dx = pageX - touch.x;
     const dy = pageY - touch.y;
     const threshold = 10;
     if (!touch.axis && Math.max(Math.abs(dx), Math.abs(dy)) >= threshold) {
       touch.axis = Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : dy > 0 ? 'down' : 'cancelled';
+    }
+    if (touch.axis === 'down' && !touch.moved) {
+      touch.moved = true;
+      repeatAction(timers.current, 'down', (action) => act(action, touch.pieceNumber));
     }
     if (touch.axis === 'horizontal') {
       const stride = Math.max(threshold, cellSize * 0.8);
@@ -30,8 +88,7 @@ export function useSwipe(enabled, cellSize, act) {
       }
     }
     if (!finish) return;
-    gesture.current = null;
-    if (touch.axis === 'down') act('drop', touch.pieceNumber);
+    cancel();
     if (!touch.axis && Date.now() - touch.started <= 275) act('rotate', touch.pieceNumber);
   }
 
@@ -43,32 +100,20 @@ export function useSwipe(enabled, cellSize, act) {
     },
     onResponderMove: (event) => track(event),
     onResponderRelease: (event) => track(event, true),
-    onResponderTerminate: () => { gesture.current = null; },
+    onResponderTerminate: cancel,
   });
 }
 
 function PadKey({ action, symbol, label, theme, act }) {
   const timers = useRef({});
-  function stop() {
-    clearTimeout(timers.current.delay);
-    clearInterval(timers.current.repeat);
-  }
+  const stop = () => stopRepeat(timers.current);
   useEffect(() => stop, []);
-
-  function start() {
-    stop();
-    if (!act(action)) return;
-    timers.current.delay = setTimeout(() => {
-      if (!act(action)) return;
-      timers.current.repeat = setInterval(() => { if (!act(action)) stop(); }, action === 'down' ? 48 : 60);
-    }, 200);
-  }
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      onPressIn={action === 'rotate' ? undefined : start}
+      onPressIn={action === 'rotate' ? undefined : () => repeatAction(timers.current, action, act)}
       onPressOut={stop}
       onPress={action === 'rotate' ? () => act(action) : undefined}
       accessibilityActions={action === 'rotate' ? undefined : [{ name: 'activate' }]}
